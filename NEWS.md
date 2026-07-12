@@ -1,3 +1,11 @@
+# DBmaps (development version)
+
+*   Added `discover_metadata()`: automatically generates a metadata registry
+    from a named list of data.tables by detecting identifier columns and
+    foreign-key relationships (name links + value containment), so the
+    registry can be scaffolded instead of hand-written before
+    `map_join_paths()`.
+
 # DBmaps 0.1.0
 
 *   Initial release of `DBmaps`.
