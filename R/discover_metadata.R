@@ -40,6 +40,14 @@
 #'   linked. Defaults to `0.95`, which tolerates a small share of orphan rows.
 #' @param min_card A positive integer; the minimum number of distinct values a
 #'   column needs to qualify as a parent key. Defaults to `2`.
+#' @param alias_map An optional named list mapping semantically-named child
+#'   columns to the parent key column they reference, e.g.
+#'   `list(reportsto = "employeeid", shipvia = "shipperid")`. The alias value
+#'   must be the parent key's actual column name; matching is case-insensitive
+#'   on both sides (a `reportsto` alias covers a `ReportsTo` column). An alias only opens the
+#'   name-link gate: value containment is still required, so a wrong alias
+#'   cannot force a spurious join. This is the escape hatch for names the
+#'   conventions above cannot cover (semantic names, irregular plurals).
 #' @return A `MetadataRegistry` object (a data.table), as produced by
 #'   [create_metadata_registry()] and [add_table()], with one set of rows per
 #'   table for which metadata could be discovered.
@@ -61,7 +69,8 @@
 #' # ~30% of transactions$customer_id values exist in 'customers' in the
 #' # bundled data, so joining on it would silently drop most rows.
 #' map_join_paths(registry)
-discover_metadata <- function(data_list, tau = 0.95, min_card = 2) {
+discover_metadata <- function(data_list, tau = 0.95, min_card = 2,
+                              alias_map = list()) {
   if (!is.list(data_list) || is.null(names(data_list)) ||
       any(!nzchar(names(data_list)))) {
     stop("'data_list' must be a named list of data.tables.")
@@ -75,9 +84,18 @@ discover_metadata <- function(data_list, tau = 0.95, min_card = 2) {
   if (!is.numeric(min_card) || length(min_card) != 1 || min_card < 1) {
     stop("'min_card' must be a positive integer.")
   }
+  if (!is.list(alias_map) ||
+      (length(alias_map) > 0 && (is.null(names(alias_map)) ||
+        any(!nzchar(names(alias_map))))) ||
+      !all(vapply(alias_map, function(x)
+        is.character(x) && length(x) == 1 && nzchar(x), logical(1)))) {
+    stop("'alias_map' must be a named list of single character strings, ",
+         "e.g. list(reportsto = \"employeeid\").")
+  }
 
   profiles <- lapply(data_list, .dm_profile_table)
-  joins <- .dm_discover_join_pairs(profiles, tau = tau, min_card = min_card)
+  joins <- .dm_discover_join_pairs(profiles, tau = tau, min_card = min_card,
+                                   alias_map = alias_map)
 
   registry <- create_metadata_registry()
   skipped <- character(0)
@@ -118,6 +136,19 @@ discover_metadata <- function(data_list, tau = 0.95, min_card = 2) {
   grepl("(^id$)|(_id$)|([a-z0-9]id$)", tolower(col))
 }
 
+# Dictionary-free singularization of a table name, for matching child columns
+# like category_id against a table named 'categories'. Handles the regular
+# English patterns: ies -> y (categories), sibilant + es (addresses, boxes,
+# dishes), plain s (customers, houses). Truly irregular names (people, criteria)
+# are out of scope by design -- the alias_map argument is the escape hatch.
+#' @noRd
+.dm_singularize <- function(x) {
+  x <- tolower(x)
+  if (endsWith(x, "ies")) return(sub("ies$", "y", x))
+  if (grepl("(ss|x|z|ch|sh)es$", x)) return(sub("es$", "", x))
+  sub("s$", "", x)
+}
+
 # Profile one table: per column, the distinct non-missing values (as
 # character), their count, and whether the column is unique. List-columns
 # (e.g. BLOBs, which DBI backends return as 'blob' class columns) are marked
@@ -149,9 +180,13 @@ discover_metadata <- function(data_list, tau = 0.95, min_card = 2) {
   cc <- tolower(child_col)
   pc <- tolower(parent_col)
   if (cc == pc) return(TRUE)
+  # A bare suffix match needs length to be safe ('liquid' must not hit a key
+  # named 'uid'); an underscore boundary makes short keys safe ('user_uid'
+  # ends with '_uid', 'liquid' does not).
   if (nchar(pc) >= 4 && endsWith(cc, pc)) return(TRUE)
+  if (nchar(pc) >= 2 && endsWith(cc, paste0("_", pc))) return(TRUE)
   if (same_table) return(FALSE)
-  ent <- sub("s$", "", tolower(parent_table))
+  ent <- .dm_singularize(parent_table)
   forms <- c(paste0(ent, "id"), paste0(ent, "_id"))
   if (cc %in% forms) return(TRUE)
   any(nchar(forms) >= 5 & vapply(forms, function(f) endsWith(cc, f), logical(1)))
@@ -163,7 +198,8 @@ discover_metadata <- function(data_list, tau = 0.95, min_card = 2) {
 # per child column, ranked by containment, table-name affinity, and exact
 # column-name match.
 #' @noRd
-.dm_discover_join_pairs <- function(profiles, tau, min_card) {
+.dm_discover_join_pairs <- function(profiles, tau, min_card,
+                                    alias_map = list()) {
   empty <- data.table::data.table(
     table_from = character(), col_from = character(),
     table_to = character(), col_to = character())
@@ -180,17 +216,22 @@ discover_metadata <- function(data_list, tau = 0.95, min_card = 2) {
   best <- list()
   for (ct in tn) for (cc in profiles[[ct]]) {
     if (cc$n_distinct < 1) next
-    cc_l <- tolower(cc$col)
+    # an alias substitutes the child's *effective* name for the name gate and
+    # scoring; value containment below is never bypassed. Lookup is
+    # case-insensitive, like every other name comparison here.
+    ai <- match(tolower(cc$col), tolower(names(alias_map)))
+    eff_col <- if (!is.na(ai)) alias_map[[ai]] else cc$col
+    cc_l <- tolower(eff_col)
     for (pk in pkeys) {
       same_tbl <- pk$table == ct
       if (same_tbl && pk$col == cc$col) next
-      if (!.dm_name_links_to_parent(cc$col, pk$col, pk$table, same_tbl)) next
+      if (!.dm_name_links_to_parent(eff_col, pk$col, pk$table, same_tbl)) next
       inter <- length(intersect(cc$set, pk$set))
       exact <- identical(cc_l, tolower(pk$col))
       if (inter < (if (exact) 1 else 2)) next
       containment <- inter / cc$n_distinct
       if (containment < tau) next
-      ent <- sub("s$", "", tolower(pk$table))
+      ent <- .dm_singularize(pk$table)
       base <- sub("_?id$", "", cc_l)
       affinity <- (base == ent) || (nchar(ent) >= 3 && startsWith(cc_l, ent))
       score <- containment + 0.30 * affinity + 0.05 * exact
@@ -216,7 +257,7 @@ discover_metadata <- function(data_list, tau = 0.95, min_card = 2) {
   cands <- Filter(function(p) p$is_unique && p$n_distinct >= 1 &&
                     .dm_looks_like_id(p$col), profile)
   if (length(cands) == 0) return(NA_character_)
-  ent <- sub("s$", "", tolower(tbl))
+  ent <- .dm_singularize(tbl)
   score <- function(p) {
     cl <- tolower(p$col)
     3 * (cl == paste0(ent, "id")) + 3 * (cl == paste0(ent, "_id")) +

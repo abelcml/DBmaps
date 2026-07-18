@@ -113,6 +113,85 @@ test_that("tables with no identifier and no FKs are skipped with a message", {
   expect_true("keyed" %in% reg$table_name)
 })
 
+test_that("short parent keys link via an underscore boundary, not a bare suffix", {
+  users <- data.table(uid = 1:5, uname = letters[1:5])
+  # 'liquid' carries the same values as a real FK would, and its name happens
+  # to end in "uid": only the underscore boundary separates it from user_uid.
+  posts <- data.table(post_id = 1:8,
+                      user_uid = c(1, 2, 3, 4, 5, 1, 2, 3),
+                      liquid   = c(1, 2, 3, 4, 5, 1, 2, 3))
+  reg <- discover_metadata(list(users = users, posts = posts))
+  groups <- unlist(reg$grouping_variable[reg$table_name == "posts"])
+  expect_true("user_uid" %in% groups)
+  expect_false("liquid" %in% groups)
+})
+
+test_that("irregular plural table names singularize correctly", {
+  expect_equal(.dm_singularize("categories"), "category")
+  expect_equal(.dm_singularize("countries"), "country")
+  expect_equal(.dm_singularize("addresses"), "address")
+  expect_equal(.dm_singularize("boxes"), "box")
+  expect_equal(.dm_singularize("customers"), "customer")
+  expect_equal(.dm_singularize("houses"), "house")
+})
+
+test_that("category_id binds to 'categories' even against a rival key", {
+  # Both parents hold the same id values; only table-name affinity (through
+  # correct singularization of 'categories') picks the right one.
+  categories <- data.table(id = 1:4, label = letters[1:4])
+  stores     <- data.table(id = 1:4, sname = letters[1:4])
+  items <- data.table(item_id = 1:8, category_id = rep(1:4, 2))
+  profiles <- lapply(list(categories = categories, stores = stores,
+                          items = items), .dm_profile_table)
+  joins <- .dm_discover_join_pairs(profiles, tau = 0.95, min_card = 2,
+                                   alias_map = list())
+  hit <- joins[joins$table_from == "items" & joins$col_from == "category_id", ]
+  expect_identical(hit$table_to, "categories")
+})
+
+test_that("alias_map opens the name gate for semantic FK names", {
+  # CamelCase column names, as real databases (Chinook, Northwind) have them:
+  # alias matching must be case-insensitive like every other name comparison.
+  employees <- data.table(EmployeeId = 1:5, ename = letters[1:5],
+                          ReportsTo = c(NA, 1, 1, 2, 2))
+  shippers <- data.table(ShipperId = 1:3, sname = c("a", "b", "c"))
+  orders <- data.table(order_id = 1:6, ShipVia = c(1, 2, 3, 1, 2, 3))
+  dl <- list(employees = employees, shippers = shippers, orders = orders)
+
+  # without aliases these semantic names are (correctly) not linked
+  reg0 <- discover_metadata(dl)
+  expect_false("ShipVia" %in%
+                 unlist(reg0$grouping_variable[reg0$table_name == "orders"]))
+
+  # aliases map the semantic name to the actual parent key column name
+  reg1 <- discover_metadata(dl, alias_map = list(reportsto = "employeeid",
+                                                 shipvia = "shipperid"))
+  expect_true("ShipVia" %in%
+                unlist(reg1$grouping_variable[reg1$table_name == "orders"]))
+  # includes the self-referential case
+  expect_true("ReportsTo" %in%
+                unlist(reg1$grouping_variable[reg1$table_name == "employees"]))
+})
+
+test_that("alias_map cannot force a join without value evidence", {
+  things <- data.table(thing_id = 1:5, v = letters[1:5])
+  other <- data.table(other_code = 100:105)   # values disjoint from thing_id
+  reg <- suppressMessages(
+    discover_metadata(list(things = things, other = other),
+                      alias_map = list(other_code = "thing_id")))
+  # the alias opens the name gate but containment still fails -> no link,
+  # and 'other' (no identifier, no FK) is skipped entirely
+  expect_false("other" %in% reg$table_name)
+})
+
+test_that("alias_map is validated", {
+  dl <- list(a = data.table(a_id = 1:3))
+  expect_error(discover_metadata(dl, alias_map = list("employeeid")),
+               "alias_map")
+  expect_error(discover_metadata(dl, alias_map = list(x = c("a", "b"))),
+               "alias_map")
+})
+
 test_that("the registry works end-to-end on the bundled example data", {
   reg <- discover_metadata(list(customers = customers, products = products,
                                 transactions = transactions))

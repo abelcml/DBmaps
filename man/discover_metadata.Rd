@@ -4,7 +4,7 @@
 \alias{discover_metadata}
 \title{Automatically Discover Table Metadata from Data}
 \usage{
-discover_metadata(data_list, tau = 0.95, min_card = 2)
+discover_metadata(data_list, tau = 0.95, min_card = 2, alias_map = list())
 }
 \arguments{
 \item{data_list}{A named list of data.tables, one per table.}
@@ -15,6 +15,15 @@ linked. Defaults to \code{0.95}, which tolerates a small share of orphan rows.}
 
 \item{min_card}{A positive integer; the minimum number of distinct values a
 column needs to qualify as a parent key. Defaults to \code{2}.}
+
+\item{alias_map}{An optional named list mapping semantically-named child
+columns to the parent key column they reference, e.g.
+\code{list(reportsto = "employeeid", shipvia = "shipperid")}. The alias value
+must be the parent key's actual column name; matching is case-insensitive
+on both sides (a \code{reportsto} alias covers a \code{ReportsTo} column). An alias only opens the
+name-link gate: value containment is still required, so a wrong alias
+cannot force a spurious join. This is the escape hatch for names the
+conventions above cannot cover (semantic names, irregular plurals).}
 }
 \value{
 A \code{MetadataRegistry} object (a data.table), as produced by
