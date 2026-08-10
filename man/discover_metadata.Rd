@@ -41,7 +41,8 @@ the generated scaffold with \code{\link[=table_info]{table_info()}} / \code{\lin
 }
 \details{
 Detection combines two signals. Candidate parent keys are columns that are
-unique, id-named (\code{id}, \verb{_id}, \verb{<entity>Id}), and have at least \code{min_card}
+unique, id-named (suffix forms \code{id}, \verb{_id}, \verb{<entity>Id}, or prefix forms
+\verb{id_<entity>} and \verb{id<Entity>}), and have at least \code{min_card}
 distinct values. A child column is linked to a parent key only if (a) its
 name points at that parent (equal to the parent column, ending with it, or
 matching the parent table's entity name, e.g. \code{customer_id} for table

@@ -126,6 +126,43 @@ test_that("short parent keys link via an underscore boundary, not a bare suffix"
   expect_false("liquid" %in% groups)
 })
 
+test_that("id detection covers prefix conventions without matching ordinary words", {
+  # suffix forms (unchanged)
+  expect_true(.dm_looks_like_id("id"))
+  expect_true(.dm_looks_like_id("user_id"))
+  expect_true(.dm_looks_like_id("userId"))
+  # prefix forms: underscore, and camelCase on the original string
+  expect_true(.dm_looks_like_id("id_user"))
+  expect_true(.dm_looks_like_id("ID_USER"))
+  expect_true(.dm_looks_like_id("idCustomer"))
+  expect_true(.dm_looks_like_id("IdUser"))
+  expect_true(.dm_looks_like_id("IDNumber"))
+  # ordinary words beginning with "id" must not qualify
+  expect_false(.dm_looks_like_id("identity"))
+  expect_false(.dm_looks_like_id("Identity"))
+  expect_false(.dm_looks_like_id("IDENTITY"))
+  expect_false(.dm_looks_like_id("ideal"))
+  expect_false(.dm_looks_like_id("idle"))
+  expect_false(.dm_looks_like_id("idea"))
+})
+
+test_that("a table keyed with a prefix id is not skipped", {
+  users <- data.table(id_user = 1:5, username = letters[1:5],
+                      signup_date = as.Date("2026-01-01") + 1:5)
+  reg <- discover_metadata(list(Users = users))
+  expect_true("Users" %in% reg$table_name)
+  expect_identical(reg$identifier_columns[reg$table_name == "Users"][[1]],
+                   "id_user")
+})
+
+test_that("prefix-id foreign keys link across tables", {
+  users <- data.table(id_user = 1:5, username = letters[1:5])
+  posts <- data.table(id_post = 1:6, id_user = c(1, 2, 3, 1, 2, 3))
+  reg <- discover_metadata(list(Users = users, Posts = posts))
+  jm <- map_join_paths(reg)
+  expect_true(has_join(jm, "Posts", "Users"))
+})
+
 test_that("irregular plural table names singularize correctly", {
   expect_equal(.dm_singularize("categories"), "category")
   expect_equal(.dm_singularize("countries"), "country")

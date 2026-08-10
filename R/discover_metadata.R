@@ -10,7 +10,8 @@
 #'
 #' @details
 #' Detection combines two signals. Candidate parent keys are columns that are
-#' unique, id-named (`id`, `_id`, `<entity>Id`), and have at least `min_card`
+#' unique, id-named (suffix forms `id`, `_id`, `<entity>Id`, or prefix forms
+#' `id_<entity>` and `id<Entity>`), and have at least `min_card`
 #' distinct values. A child column is linked to a parent key only if (a) its
 #' name points at that parent (equal to the parent column, ending with it, or
 #' matching the parent table's entity name, e.g. `customer_id` for table
@@ -130,10 +131,16 @@ discover_metadata <- function(data_list, tau = 0.95, min_card = 2,
 }
 
 # Does this column name follow a primary/foreign key naming convention?
-# Matches "id", "*_id", "<entity>Id" and similar.
+# Suffix forms: "id", "*_id", "<entity>Id". Prefix forms: "id_<entity>" and
+# camelCase "id<Entity>". The prefix forms need a boundary, or ordinary words
+# beginning with "id" (identity, ideal, idle) would qualify: the underscore
+# supplies it in one case, and in the other the "ID" must be followed by an
+# uppercase letter and then a lowercase one, which "IDENTITY" (all caps) and
+# "Identity" (title case) both fail.
 #' @noRd
 .dm_looks_like_id <- function(col) {
-  grepl("(^id$)|(_id$)|([a-z0-9]id$)", tolower(col))
+  grepl("(^id$)|(_id$)|([a-z0-9]id$)|(^id_)", tolower(col)) ||
+    grepl("^[Ii][Dd][A-Z][a-z]", col)
 }
 
 # Dictionary-free singularization of a table name, for matching child columns
@@ -187,7 +194,7 @@ discover_metadata <- function(data_list, tau = 0.95, min_card = 2,
   if (nchar(pc) >= 2 && endsWith(cc, paste0("_", pc))) return(TRUE)
   if (same_table) return(FALSE)
   ent <- .dm_singularize(parent_table)
-  forms <- c(paste0(ent, "id"), paste0(ent, "_id"))
+  forms <- c(paste0(ent, "id"), paste0(ent, "_id"), paste0("id_", ent))
   if (cc %in% forms) return(TRUE)
   any(nchar(forms) >= 5 & vapply(forms, function(f) endsWith(cc, f), logical(1)))
 }
@@ -261,6 +268,7 @@ discover_metadata <- function(data_list, tau = 0.95, min_card = 2,
   score <- function(p) {
     cl <- tolower(p$col)
     3 * (cl == paste0(ent, "id")) + 3 * (cl == paste0(ent, "_id")) +
+      3 * (cl == paste0("id_", ent)) +
       2 * (cl == "id") + 1 * startsWith(cl, ent) + 1e-9 * p$n_distinct
   }
   vapply(cands, function(p) p$col, character(1))[
