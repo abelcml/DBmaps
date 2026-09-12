@@ -244,3 +244,43 @@ test_that("the registry works end-to-end on the bundled example data", {
   # non-joinable is intended behavior, not a miss.
   expect_false(has_join(jm, "transactions", "customers"))
 })
+test_that("a standalone detail table gets its composite key detected", {
+  order_details <- data.table(
+    order_id   = c(1, 1, 2, 2, 3),
+    product_id = c(10, 20, 10, 30, 20),
+    quantity   = c(2, 5, 1, 1, 10)
+  )
+  reg <- discover_metadata(list(OrderDetails = order_details))
+  expect_true("OrderDetails" %in% reg$table_name)
+  expect_setequal(reg$identifier_columns[[1]], c("order_id", "product_id"))
+})
+
+test_that("a column that is unique on its own never forms a composite key", {
+  # user_id already identifies a row, so (user_id, group_id) is a single key
+  # with a passenger, not a composite key.
+  users <- data.table(user_id = 1:5, group_id = c(1, 1, 2, 2, 3))
+  reg <- discover_metadata(list(Users = users))
+  expect_identical(reg$identifier_columns[[1]], "user_id")
+})
+
+test_that("a three-column key is found when no pair is unique", {
+  d <- data.table(
+    a_id = c(1, 1, 1, 1, 2, 2, 2, 2),
+    b_id = c(1, 1, 2, 2, 1, 1, 2, 2),
+    c_id = c(1, 2, 1, 2, 1, 2, 1, 2)
+  )
+  reg <- discover_metadata(list(Cube = d))
+  expect_setequal(reg$identifier_columns[[1]], c("a_id", "b_id", "c_id"))
+})
+
+test_that("the key returned is minimal, and max_key_cols caps the search", {
+  d <- data.table(
+    a_id = c(1, 1, 1, 1, 2, 2, 2, 2),
+    b_id = c(1, 1, 2, 2, 1, 1, 2, 2),
+    c_id = c(1, 2, 1, 2, 1, 2, 1, 2)
+  )
+  # capped at pairs, no pair is unique, so nothing is found and the table is skipped
+  expect_message(reg <- discover_metadata(list(Cube = d), max_key_cols = 2),
+                 "Cube")
+  expect_false("Cube" %in% reg$table_name)
+})

@@ -49,6 +49,9 @@
 #'   name-link gate: value containment is still required, so a wrong alias
 #'   cannot force a spurious join. This is the escape hatch for names the
 #'   conventions above cannot cover (semantic names, irregular plurals).
+#' @param max_key_cols A positive integer; the largest number of columns a
+#'   discovered composite key may span. Defaults to `3`. Combinations are
+#'   searched smallest first, so the key returned is always minimal.
 #' @return A `MetadataRegistry` object (a data.table), as produced by
 #'   [create_metadata_registry()] and [add_table()], with one set of rows per
 #'   table for which metadata could be discovered.
@@ -71,7 +74,7 @@
 #' # bundled data, so joining on it would silently drop most rows.
 #' map_join_paths(registry)
 discover_metadata <- function(data_list, tau = 0.95, min_card = 2,
-                              alias_map = list()) {
+                              alias_map = list(), max_key_cols = 3) {
   if (!is.list(data_list) || is.null(names(data_list)) ||
       any(!nzchar(names(data_list)))) {
     stop("'data_list' must be a named list of data.tables.")
@@ -104,8 +107,13 @@ discover_metadata <- function(data_list, tau = 0.95, min_card = 2,
     identifier <- .dm_pick_identifier(tbl, profiles[[tbl]])
     fk_cols <- unique(joins$col_from[joins$table_from == tbl])
     if (is.na(identifier)) {
-      if (length(fk_cols) == 0) { skipped <- c(skipped, tbl); next }
-      identifier <- fk_cols            # composite grain for keyless tables
+      if (length(fk_cols) > 0) {
+        identifier <- fk_cols          # composite grain for keyless tables
+      } else {
+        identifier <- .dm_find_composite_key(data_list[[tbl]], profiles[[tbl]],
+                                             max_key_cols)
+        if (is.null(identifier)) { skipped <- c(skipped, tbl); next }
+      }
     }
     grouping <- if (length(fk_cols) > 0) fk_cols else identifier[1]
     aggs <- lapply(grouping, function(g) list(
@@ -273,4 +281,26 @@ discover_metadata <- function(data_list, tau = 0.95, min_card = 2,
   }
   vapply(cands, function(p) p$col, character(1))[
     which.max(vapply(cands, score, numeric(1)))]
+}
+# Find a composite key from the table's own data. Used only when neither a
+# single-column key nor foreign keys are available, since both of those rest
+# on stronger evidence. Candidates must be id-named, not unique on their own
+# (a column that is already unique would be the key by itself), and free of
+# missing values, because a key component cannot be NULL. Combinations are
+# tried smallest first, so the result is minimal: a triple comes back only
+# when no pair works.
+#' @noRd
+.dm_find_composite_key <- function(dt, profile, max_cols = 3) {
+  cands <- Filter(function(p) !p$is_unique && p$n_distinct >= 2 &&
+                    .dm_looks_like_id(p$col), profile)
+  cols <- vapply(cands, function(p) p$col, character(1))
+  cols <- cols[!vapply(cols, function(cn) anyNA(dt[[cn]]), logical(1))]
+  if (length(cols) < 2) return(NULL)
+
+  for (k in 2:min(max_cols, length(cols))) {
+    for (combo in utils::combn(cols, k, simplify = FALSE)) {
+      if (anyDuplicated(dt, by = combo) == 0) return(combo)
+    }
+  }
+  NULL
 }

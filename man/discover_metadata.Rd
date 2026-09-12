@@ -4,7 +4,13 @@
 \alias{discover_metadata}
 \title{Automatically Discover Table Metadata from Data}
 \usage{
-discover_metadata(data_list, tau = 0.95, min_card = 2, alias_map = list())
+discover_metadata(
+  data_list,
+  tau = 0.95,
+  min_card = 2,
+  alias_map = list(),
+  max_key_cols = 3
+)
 }
 \arguments{
 \item{data_list}{A named list of data.tables, one per table.}
@@ -24,6 +30,10 @@ on both sides (a \code{reportsto} alias covers a \code{ReportsTo} column). An al
 name-link gate: value containment is still required, so a wrong alias
 cannot force a spurious join. This is the escape hatch for names the
 conventions above cannot cover (semantic names, irregular plurals).}
+
+\item{max_key_cols}{A positive integer; the largest number of columns a
+discovered composite key may span. Defaults to \code{3}. Combinations are
+searched smallest first, so the key returned is always minimal.}
 }
 \value{
 A \code{MetadataRegistry} object (a data.table), as produced by
